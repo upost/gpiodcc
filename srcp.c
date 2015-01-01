@@ -340,6 +340,11 @@ static void locoinfo(int sock, struct genericloco *loco)
 	writeto(sock, buffer);
 }
 
+static void initga(int sock, char **saveptr) {
+	// TODO
+	writeto(sock, "200 OK\r\n");
+}
+
 static void initloco(int sock, char **saveptr)
 {
 	int address, protocol, speedsteps, numfuncs;
@@ -393,6 +398,11 @@ static void initloco(int sock, char **saveptr)
 	newtrain->dccfunc0to4 = NULL;
 	newtrain->next = NULL;
 
+	writeto(sock, "200 OK\r\n");
+}
+
+static void setga(int sock, char **saveptr) {
+	// TODO
 	writeto(sock, "200 OK\r\n");
 }
 
@@ -564,18 +574,18 @@ static void getpower(int sock, char **saveptr)
 
 
 #define COMMANDS "GET", "SET", "CHECK", "WAIT", "INIT", "TERM", "RESET", "VERIFY"
-#define FACILITIES "GL", "POWER"
+#define FACILITIES "GL", "POWER" , "GA"
 
-static void (*srcpfunction[8][2])(int, char **) =
+static void (*srcpfunction[8][3])(int, char **) =
 {
-	{ getloco, getpower },
-	{ setloco, setpower },
-	{ badcommand, badcommand },
-	{ badcommand, badcommand },
-	{ initloco, initpower },
-	{ termloco, termpower },
-	{ badcommand, badcommand },
-	{ badcommand, badcommand }
+	{ getloco, getpower, badcommand },
+	{ setloco, setpower, setga },
+	{ badcommand, badcommand, badcommand },
+	{ badcommand, badcommand, badcommand },
+	{ initloco, initpower, initga },
+	{ termloco, termpower, badcommand },
+	{ badcommand, badcommand, badcommand },
+	{ badcommand, badcommand, badcommand }
 };
 
 static void *communicationthread(struct newthreaddata *ntd)
@@ -601,7 +611,8 @@ static void *communicationthread(struct newthreaddata *ntd)
 		exit(1);
 	}
 
-	while(1)
+	// do not wait for this because jsrcpd does not send it
+	while(0)
 	{
 		readlen = readfrom(sock, buffer, sizeof(buffer));
 
@@ -624,7 +635,7 @@ static void *communicationthread(struct newthreaddata *ntd)
 		writeto(sock, "400 ERROR unsupported protocol\r\n");
 	}
 
-	writeto(sock, "201 OK PROTOCOL SRCP\r\n");
+	//writeto(sock, "201 OK PROTOCOL SRCP\r\n");
 
 	connectionmode = NONE;
 
