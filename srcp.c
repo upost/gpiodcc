@@ -681,6 +681,7 @@ static void *communicationthread(struct newthreaddata *ntd)
 	writeto(sock, buffer);
 
 	/* Handshake completed */
+	printf("Handshake completed\r\n");
 
 	while ((readlen = readfrom(sock, buffer, sizeof(buffer))) > 0)
 	{
@@ -688,6 +689,7 @@ static void *communicationthread(struct newthreaddata *ntd)
 		
 		if(command<0)
 		{
+			printf(" unknown command: %s\r\n", &saveptr);
 			writeto(sock, "410 ERROR unknown command\r\n");
 
 			continue;
@@ -699,6 +701,7 @@ static void *communicationthread(struct newthreaddata *ntd)
 
 		if(facility<0)
 		{
+			printf(" unknown facility: %s\r\n", &saveptr);
 			writeto(sock, "410 ERROR unknown command\r\n");
 
 			continue;
