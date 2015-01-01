@@ -667,7 +667,7 @@ static void *communicationthread(struct newthreaddata *ntd)
 		}
 	}
 
-	while(1)
+	while(0)
 	{
 		readlen = readfrom(sock, buffer, sizeof(buffer));
 
@@ -677,8 +677,8 @@ static void *communicationthread(struct newthreaddata *ntd)
 		writeto(sock, "410 ERROR unknown command\r\n");
 	}
 
-	sprintf(buffer, "200 OK %u\r\n", (unsigned int)pthread_self());
-	writeto(sock, buffer);
+	//sprintf(buffer, "200 OK %u\r\n", (unsigned int)pthread_self());
+	//writeto(sock, buffer);
 
 	/* Handshake completed */
 	printf("Handshake completed\r\n");
