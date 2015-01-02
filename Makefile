@@ -3,7 +3,7 @@ CFLAGS:=-Wall
 
 # Uncomment this to include a timestamp in DCC replies. The standard mandates
 # it, but JMRI doesn't like it
-# CFLAGS:=$(CFLAGS) -DINCLUDETIME
+CFLAGS:=$(CFLAGS) -DINCLUDETIME
 
 all: gpiodcc
 
