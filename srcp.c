@@ -1,13 +1,9 @@
 /* SRCP for the Raspberry Pi
  *
- * THIS IS NOT A PROPER IMPLEMENTATION OF SRCP
+ * THIS IS NOT A COMPLETE IMPLEMENTATION OF SRCP
  *
- * It is missing quite of a few things, and, more imporantly, skips out
- * some important bits in order to work properly with JMRI. JMRI appears
- * to have implemented its own protocol which is almost, but not quite,
- * entirely unlike SRCP
+ * It must be considered entirely untested.
  *
- * SRCP purists, look away now...
  */
 
 #include <stdio.h>
@@ -53,7 +49,6 @@
 #include "srcp.h"
 #include "dcc.h"
 
-
 /* Structure for passing data to newly-created threads */
 struct newthreaddata
 {
@@ -62,6 +57,8 @@ struct newthreaddata
 
 /* Linked list of all the trains we know about */
 static struct genericloco *trainlist = NULL;
+static struct generic_accessory *galist = NULL;
+
 
 void debug_printtrainlist(void)
 {
@@ -217,10 +214,13 @@ static int __tokenmatch(char *buffer, char **saveptr, ...)
 	unsigned int stringnumber;
 	va_list ap;
 
+	//if(buffer) printf(" buffer: %s\r\n", buffer);
 	token = strtok_r(buffer, " \r\n", saveptr);
 
 	if(!token)
 		return -1;
+
+	//printf(" token: %s\r\n", token);
 
 	stringnumber = 0;
 
@@ -256,6 +256,19 @@ static void badcommand(int sock, char **unused)
 	writeto(sock, "410 ERROR unknown command\r\n");
 }
 
+static struct generic_accessory *find_accessory(unsigned int address) {
+	struct generic_accessory *ga;
+
+	ga = galist;
+
+	while(ga) {
+		if(ga->address==address) break;
+		ga = ga->next;
+	}
+
+	return ga;
+}
+
 static struct genericloco *findloco(unsigned int address)
 {
 	struct genericloco *loco;
@@ -273,6 +286,18 @@ static struct genericloco *findloco(unsigned int address)
 	return loco;
 }
 
+static struct generic_accessory *new_accessory(void) {
+	struct generic_accessory **ga;
+	ga = &galist;
+	while(*ga) {
+		ga = &((*ga)->next);
+	}
+
+	*ga = malloc(sizeof(struct generic_accessory));
+	printf("New generic accessory\r\n");
+	return *ga;
+}
+
 static struct genericloco *newloco(void)
 {
 	struct genericloco **loco;
@@ -286,8 +311,26 @@ static struct genericloco *newloco(void)
 
 	*loco = malloc(sizeof(struct genericloco));
 
-	printf("New loco\n\n");
+	printf("New loco\r\n");
 	return *loco;
+}
+
+static void remove_accessory(unsigned int address) {
+	struct generic_accessory **ga;
+	struct generic_accessory *ptr;
+
+	ga = &galist;
+
+	while(*ga) {
+		if((*ga)->address==address) {
+			ptr = *ga;
+			*ga = (*ga)->next;
+			free(ptr);
+			printf("Deleted accessory\r\n");
+			return;
+		}
+		ga = &((*ga)->next);
+	}
 }
 
 static void removeloco(unsigned int address)
@@ -307,7 +350,7 @@ static void removeloco(unsigned int address)
 
 			free(ptr);
 
-			printf("Deleted loco\n\n");
+			printf("Deleted loco\r\n");
 			return;
 		}
 		
@@ -341,7 +384,25 @@ static void locoinfo(int sock, struct genericloco *loco)
 }
 
 static void initga(int sock, char **saveptr) {
-	// TODO
+	//
+	int address, protocol;
+	struct generic_accessory *ga;
+
+	address = tokeninteger(NULL, saveptr);
+
+	if(tokenmatch(NULL, saveptr, "N"))
+	{
+		writeto(sock, "412 ERROR wrong value\r\n");
+		return;
+	}
+
+	ga = new_accessory();
+	ga->address = address;
+	ga->dcccommand = NULL;
+	ga->next = NULL;
+	ga->port = 0;
+	ga->value = 0;
+
 	writeto(sock, "200 OK\r\n");
 }
 
@@ -402,8 +463,39 @@ static void initloco(int sock, char **saveptr)
 }
 
 static void setga(int sock, char **saveptr) {
-	// TODO
+
+	int address, port, value, delay;
+	struct generic_accessory *ga;
+
+	address = tokeninteger(NULL, saveptr); // * not supported
+	port = tokeninteger(NULL, saveptr); // 0 or 1
+	value = tokeninteger(NULL, saveptr); // usually 1
+	delay = tokeninteger(NULL, saveptr); // delay in ms until 0 is sent
+
+	//ga = find_accessory(address);
+
+//	if(!ga) {
+//		writeto(sock, "412 ERROR wrong value\r\n");
+//		return;
+//	}
+
+//	ga->port = port;
+//	ga->value = value;
+
+	struct dccmessage *msg = add_update(NULL, 2, 128 | (address&63), 128 | (value>0?8:0) | port );
+
+//	ga->dcccommand = msg;
+
 	writeto(sock, "200 OK\r\n");
+
+	// send 0
+	usleep(delay*1000);
+	add_update(msg, 2, 128 | (address&63), 128  | port );
+
+//	ga->value = 0;
+
+//	debug_printlist();
+
 }
 
 static void setloco(int sock, char **saveptr)
@@ -611,77 +703,50 @@ static void *communicationthread(struct newthreaddata *ntd)
 		exit(1);
 	}
 
-	// do not wait for this because jsrcpd does not send it
-	while(0)
+
+	connectionmode = COMMAND;
+
+	// HANDSHAKE
+	while(1)
 	{
 		readlen = readfrom(sock, buffer, sizeof(buffer));
 
-		/* Handshake */
-		if(tokenmatch(buffer, &saveptr, "SET") ||
-			tokenmatch(NULL, &saveptr, "PROTOCOL") ||
-			tokenmatch(NULL, &saveptr, "SRCP"))
+		/* SET PROTOCOL SRCP */
+		if(strstr(buffer,"SET PROTOCOL SRCP")==buffer)
 		{
-			writeto(sock, "410 ERROR unknown command\r\n");
-
-			continue;
+			/* 0.8.3 = JMRI
+			 * 0.82 = Android SRCP client
+			 */
+			if(strstr(buffer, "0.8.3") || strstr(buffer, "0.82") ) {
+				writeto(sock, "201 OK PROTOCOL SRCP\r\n");
+			} else {
+				writeto(sock, "400 ERROR unsupported protocol\r\n");
+			}
 		}
 
-		/* 0.8.3 = JMRI
-		 * 0.82 = Android SRCP client
-		 */
-		if(tokenmatch(NULL, &saveptr, "0.8.3", "0.82") >= 0)
+		// SET CONNECTIONMODE SRCP COMMAND
+		if(strcmp(buffer, "SET CONNECTIONMODE SRCP INFO")==0)
+		{
+			writeto(sock, "202 OK CONNECTIONMODEOK\r\n");
+			connectionmode = INFO;
+		}
+		if(strcmp(buffer, "SET CONNECTIONMODE SRCP COMMAND")==0)
+		{
+			writeto(sock, "202 OK CONNECTIONMODEOK\r\n");
+			connectionmode = COMMAND;
+		}
+
+		//
+		if(strcmp(buffer,  "GO")==0 ) {
+			sprintf(buffer, "200 OK %u\r\n", (unsigned int)pthread_self());
+			writeto(sock, buffer);
 			break;
-
-		writeto(sock, "400 ERROR unsupported protocol\r\n");
-	}
-
-	//writeto(sock, "201 OK PROTOCOL SRCP\r\n");
-
-	connectionmode = NONE;
-
-	while(connectionmode == NONE)
-	{
-		readlen = readfrom(sock, buffer, sizeof(buffer));
-
-		if(tokenmatch(buffer, &saveptr, "SET") ||
-			tokenmatch(NULL, &saveptr, "CONNECTIONMODE") ||
-			tokenmatch(NULL, &saveptr, "SRCP"))
-		{
-			writeto(sock, "410 ERROR unknown command\r\n");
-
-			continue;
 		}
 
-		connectionmode = tokenmatch(NULL, &saveptr, "INFO", "COMMAND");
-
-		switch(connectionmode)
-		{
-			case INFO:
-				writeto(sock, "401 ERROR unsupported connection mode\r\n");
-				break;
-			case COMMAND:
-				writeto(sock, "202 OK CONNECTIONMODEOK\r\n");
-				break;
-			default:
-				writeto(sock, "401 ERROR unsupported connection mode\r\n");
-		}
 	}
-
-	while(0)
-	{
-		readlen = readfrom(sock, buffer, sizeof(buffer));
-
-		if(!tokenmatch(buffer, &saveptr, "GO"))
-			break;
-
-		writeto(sock, "410 ERROR unknown command\r\n");
-	}
-
-	//sprintf(buffer, "200 OK %u\r\n", (unsigned int)pthread_self());
-	//writeto(sock, buffer);
 
 	/* Handshake completed */
-	printf("Handshake completed\r\n");
+	printf("Handshake completed, ready for commands\r\n");
 
 	while ((readlen = readfrom(sock, buffer, sizeof(buffer))) > 0)
 	{
@@ -694,6 +759,7 @@ static void *communicationthread(struct newthreaddata *ntd)
 
 			continue;
 		}
+		printf(" received command: %s\r\n", saveptr);
 
 		bus = tokeninteger(NULL, &saveptr);
 
@@ -706,8 +772,11 @@ static void *communicationthread(struct newthreaddata *ntd)
 
 			continue;
 		}
+		//printf("  for facility: %s\r\n", saveptr);
 
 		srcpfunction[command][facility](sock, &saveptr);
+
+		printf(" ... completed command\r\n");
 	}
 
 	return NULL;
@@ -722,12 +791,14 @@ int main(void)
 	pthread_t threadid;
 	struct newthreaddata *ntd;
 
+	printf("Starting GPIO DCC engine...\r\n");
 	setup_dcc();
 
 	listensock = setup_network();
 
 	addrlen = sizeof(remoteaddr);
 
+	printf("Starting SRCP service...\r\n");
 	while(1)
 	{
 		acceptsock = accept(listensock, (struct sockaddr *)&remoteaddr,

@@ -20,6 +20,16 @@ struct genericloco
 	struct genericloco *next;	/* Linked list */
 };
 
+/* Definition of an accessory */
+struct generic_accessory
+{
+	unsigned int address;
+	unsigned int port;
+	unsigned int value;
+	struct dccmessage *dcccommand;
+	struct generic_accessory *next;
+};
+
 extern void debug_printtrainlist(void);
 
 /* Set up the listening socket for the server */
