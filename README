@@ -1,7 +1,9 @@
 Introduction
 ------------
 
-This is a basic DCC command station for the Raspberry Pi. It generates
+This is a fork from: https://github.com/brianwiddas/gpiodcc
+
+Basic DCC command station for Raspberry Pi. It generates
 output suitable for feeding into an L298N or similar H-bridge. I've
 successfully used it with one like this:
 
@@ -61,16 +63,18 @@ SET 1 GL 5 1 50 100 1
 Note
 ----
 
-This code works with JMRI, and SRCP Client on Android. Other things (such as
-Rocrail) have not been tried. It is a very incomplete implementation of
-SRCP
+This code works with jsrcpc (and thus my SignalBox App for Android).
+It is a very incomplete implementation of SRCP
 
 The supported loco types are very limited for the moment:
 	Only 128 speed steps
 	Only 5 functions (FL, F1-F4)
 	Only short addresses
+	
+Generic Accessories:
+    Only short addresses (up to 63).
 
 There is currently no support for programming (either on a programming track
-or the main), or any form of accessory decoder
+or the main)
 
 This code should be regarded as experimental and incomplete
