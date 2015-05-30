@@ -2,6 +2,10 @@
 #ifndef DCC_H
 #define DCC_H
 
+#define NMRA_GA_OFFSET 0
+
+
+
 #if 0
 #include <stdio.h>
 #include <unistd.h>
@@ -63,5 +67,8 @@ extern void delete(struct dccmessage *message);
 extern void quit(int data);
 
 extern void setup_dcc(void);
+
+extern void set_power(int power);
+extern int get_power();
 
 #endif /* DCC_H */

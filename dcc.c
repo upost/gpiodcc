@@ -31,6 +31,14 @@
 
 #include "dcc.h"
 
+#define BCM2708_PERI_BASE        0x20000000
+#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO controller */
+
+#define PAGE_SIZE (4*1024)
+#define BLOCK_SIZE (4*1024)
+
+int  mem_fd;
+void *gpio_map;
 
 #define GPFSEL0	0	/* 0x00 */
 #define GPSET0	7	/* 0x1C */
@@ -57,6 +65,21 @@ static struct dccmessage idlemessage =
  * is transmitting its contents
  */
 static pthread_mutex_t dccmutex;
+
+void setup_io();
+
+// GPIO setup macros. Always use INP_GPIO(x) before using OUT_GPIO(x) or SET_GPIO_ALT(x,y)
+#define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
+#define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
+#define SET_GPIO_ALT(g,a) *(gpio+(((g)/10))) |= (((a)<=3?(a)+4:(a)==4?3:2)<<(((g)%10)*3))
+
+#define GPIO_SET *(gpio+7)  // sets   bits which are 1 ignores bits which are 0
+#define GPIO_CLR *(gpio+10) // clears bits which are 1 ignores bits which are 0
+
+#define GET_GPIO(g) (*(gpio+13)&(1<<g)) // 0 if LOW, (1<<g) if HIGH
+
+#define GPIO_PULL *(gpio+37) // Pull up/pull down
+#define GPIO_PULLCLK0 *(gpio+38) // Pull up/pull down clock
 
 /* Debug */
 void debug_printlist(void)
@@ -206,7 +229,7 @@ static void rearm_timer(timer_t timerid, struct itimerspec *time, unsigned int i
 #define OUTPUT_B gpio[GPCLR0] = 2+16; gpio[GPSET0] = 1+16
 #define PULSE0 OUTPUT_A; rearm_timer(timerid, &interval, 116000); sigwaitinfo(&sigwait_mask, NULL); OUTPUT_B; rearm_timer(timerid, &interval, 116000); sigwaitinfo(&sigwait_mask, NULL)
 #define PULSE1 OUTPUT_A; rearm_timer(timerid, &interval, 58000); sigwaitinfo(&sigwait_mask, NULL); OUTPUT_B; rearm_timer(timerid, &interval, 58000); sigwaitinfo(&sigwait_mask, NULL)
-#define PULSEIDLE OUTPUT_A; rearm_timer(timerid, &interval, 8000000); sigwaitinfo(&sigwait_mask, NULL); OUTPUT_B; rearm_timer(timerid, &interval, 1000000); sigwaitinfo(&sigwait_mask, NULL)
+#define PULSEIDLE OUTPUT_A; rearm_timer(timerid, &interval, 1000000); sigwaitinfo(&sigwait_mask, NULL); OUTPUT_B; rearm_timer(timerid, &interval, 1000000); sigwaitinfo(&sigwait_mask, NULL)
 
 static void *dccthread(void *unused)
 {
@@ -252,8 +275,16 @@ static void *dccthread(void *unused)
 
 	sigwaitinfo(&sigwait_mask, NULL);
 
+	puts("dcc out setup completed");
+
 	while(1)
 	{
+
+//		if(on==0) {
+//			usleep(100*1000);
+//			continue;
+//		}
+
 		/* Lock the message list - if it can't be locked at the
 		 * moment, keep transmitting zeroes until it can
 		 */
@@ -267,7 +298,7 @@ static void *dccthread(void *unused)
 				quit(0);
 			}
 
-			PULSE0;
+			if(on>0) PULSE0;
 		}
 
 		message = messagelist;
@@ -282,7 +313,7 @@ static void *dccthread(void *unused)
 			for(i=14; i; i--)
 			{
 				/* Short pulses */
-				PULSE1;
+				if(on>0) PULSE1;
 			}
 
 			edd = 0;
@@ -290,7 +321,7 @@ static void *dccthread(void *unused)
 			for(i=0; i<=message->length; i++)
 			{
 				/* Start-of-packet/start-of-byte pulse */
-				PULSE0;
+				if(on>0) PULSE0;
 
 				if(i<message->length)
 				{
@@ -306,11 +337,11 @@ static void *dccthread(void *unused)
 				{
 					if(byte & 128)
 					{
-						PULSE1;
+						if(on>0) PULSE1;
 					}
 					else
 					{
-						PULSE0;
+						if(on>0) PULSE0;
 					}
 
 					byte = byte << 1;
@@ -318,7 +349,7 @@ static void *dccthread(void *unused)
 			}
 
 			/* End of packet */
-			PULSE1;
+			if(on>0) PULSE1;
 
 			/* Idle for 2 cycles (58*2*2*2 = 464us).
 			 * It is theoretically possible to launch right into
@@ -328,7 +359,7 @@ static void *dccthread(void *unused)
 			 */
 			for(count=0; count<2; count++)
 			{
-				PULSE0;
+				if(on>0) PULSE0;
 			}
 
 			message = message->next;
@@ -340,7 +371,7 @@ static void *dccthread(void *unused)
 		/* Transmit zero for 16ms - 2 long half-waves to give the
 		 * CPU chance to let something else run
 		 */
-		PULSEIDLE;
+		if(on>0) PULSEIDLE;
 	}
 
 	/* This point is never reached, but pthread_cleanup_push needs to
@@ -359,19 +390,31 @@ void setup_dcc(void)
 
 	sigset_t block_mask;
 
-	fd = open("/dev/mem", O_RDWR);
+	puts("setup GPIO...");
+	setup_io();
 
-	gpio = mmap(NULL, 0xb0, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0x20200000);
+//	fd = open("/dev/mem", O_RDWR|O_SYNC);
+//
+//	gpio = mmap(NULL, 0xb0, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0x20200000);
+//
+//	if(gpio == MAP_FAILED)
+//	{
+//		perror("Could not map memory");
+//		exit(1);
+//	}
 
-	if(gpio == MAP_FAILED)
-	{
-		perror("Could not map memory");
-		exit(1);
-	}
-
+	puts("programming GPIO0,1,4 as outputs...");
 	/* GPIO[0:1] and GPIO[4] are outputs */
-	gpio[GPFSEL0] = (9+(1<<12)) | (gpio[GPFSEL0] & ~(63+(7<<12)));
+	INP_GPIO(0); // must use INP_GPIO before we can use OUT_GPIO
+	OUT_GPIO(0);
+	INP_GPIO(1); // must use INP_GPIO before we can use OUT_GPIO
+	OUT_GPIO(1);
+	INP_GPIO(4); // must use INP_GPIO before we can use OUT_GPIO
+	OUT_GPIO(4);
 
+//	gpio[GPFSEL0] = (9+(1<<12)) | (gpio[GPFSEL0] & ~(63+(7<<12)));
+
+	puts("init mutex...");
 	/* Initialise DCC message list mutex */
 	pthread_mutex_init(&dccmutex, NULL);
 
@@ -395,12 +438,65 @@ void setup_dcc(void)
 
 	if(sigaction(SIGTERM, &sa, NULL) < 0)
 	{
-		perror("Creating signal handler");
+		puts("Creating signal handler");
 		exit(EX_OSERR);
 	}
 	if(sigaction(SIGINT, &sa, NULL) < 0)
 	{
-		perror("Creating signal handler");
+		puts("Creating signal handler");
 		exit(EX_OSERR);
 	}
+
+	puts("finished init.");
+
 }
+
+
+void set_power(int power) {
+	on = power;
+	if(on>0){
+		puts("power is now on");
+	} else {
+		puts("power is now off");
+	}
+
+}
+
+int get_power() {
+	return on;
+}
+
+
+//
+// Set up a memory regions to access GPIO
+//
+void setup_io()
+{
+   /* open /dev/mem */
+   if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
+      printf("can't open /dev/mem \n");
+      exit(-1);
+   }
+
+   /* mmap GPIO */
+   gpio_map = mmap(
+      NULL,             //Any adddress in our space will do
+      BLOCK_SIZE,       //Map length
+      PROT_READ|PROT_WRITE,// Enable reading & writting to mapped memory
+      MAP_SHARED,       //Shared with other processes
+      mem_fd,           //File to map
+      GPIO_BASE         //Offset to GPIO peripheral
+   );
+
+   close(mem_fd); //No need to keep mem_fd open after mmap
+
+   if (gpio_map == MAP_FAILED) {
+      printf("mmap error %d\n", (int)gpio_map);//errno also set!
+      exit(-1);
+   }
+
+   // Always use volatile pointer!
+   gpio = (volatile unsigned *)gpio_map;
+
+
+} // setup_io

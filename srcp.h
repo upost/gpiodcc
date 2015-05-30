@@ -24,6 +24,7 @@ struct genericloco
 struct generic_accessory
 {
 	unsigned int address;
+	unsigned int pairnr;
 	unsigned int port;
 	unsigned int value;
 	struct dccmessage *dcccommand;

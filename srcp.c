@@ -256,13 +256,13 @@ static void badcommand(int sock, char **unused)
 	writeto(sock, "410 ERROR unknown command\r\n");
 }
 
-static struct generic_accessory *find_accessory(unsigned int address) {
+static struct generic_accessory *find_accessory(unsigned int address, unsigned int pairnr) {
 	struct generic_accessory *ga;
 
 	ga = galist;
 
 	while(ga) {
-		if(ga->address==address) break;
+		if(ga->address==address && ga->pairnr==pairnr) break;
 		ga = ga->next;
 	}
 
@@ -385,10 +385,10 @@ static void locoinfo(int sock, struct genericloco *loco)
 
 static void initga(int sock, char **saveptr) {
 	//
-	int address, protocol;
+	int nr, address, protocol, pairnr;
 	struct generic_accessory *ga;
 
-	address = tokeninteger(NULL, saveptr);
+	nr = tokeninteger(NULL, saveptr);
 
 	if(tokenmatch(NULL, saveptr, "N"))
 	{
@@ -396,13 +396,18 @@ static void initga(int sock, char **saveptr) {
 		return;
 	}
 
-	ga = new_accessory();
-	ga->address = address;
-	ga->dcccommand = NULL;
-	ga->next = NULL;
-	ga->port = 0;
-	ga->value = 0;
+	address = ((nr - 1) / 4) + NMRA_GA_OFFSET;
+	pairnr = (nr - 1) % 4;
 
+	if(!find_accessory(address,pairnr)) {
+		ga = new_accessory();
+		ga->address = address;
+		ga->pairnr = pairnr;
+		ga->dcccommand = NULL;
+		ga->next = NULL;
+		ga->port = 0;
+		ga->value = 0;
+	}
 	writeto(sock, "200 OK\r\n");
 }
 
@@ -445,56 +450,70 @@ static void initloco(int sock, char **saveptr)
 		return;
 	}
 
-	newtrain = newloco();
+	if(!findloco(address)) {
+		newtrain = newloco();
 
-	newtrain->address = address;
-	newtrain->protocolversion = protocol;
-	newtrain->speedsteps = speedsteps;
-	newtrain->numfuncs = numfuncs;
-	newtrain->funcs = 0;
-	newtrain->drivemode = 1 ;//2;
-	newtrain->v = 0;
-	newtrain->vmax = 100;
-	newtrain->dccspeed = NULL;
-	newtrain->dccfunc0to4 = NULL;
-	newtrain->next = NULL;
-
+		newtrain->address = address;
+		newtrain->protocolversion = protocol;
+		newtrain->speedsteps = speedsteps;
+		newtrain->numfuncs = numfuncs;
+		newtrain->funcs = 0;
+		newtrain->drivemode = 1 ;//2;
+		newtrain->v = 0;
+		newtrain->vmax = 100;
+		newtrain->dccspeed = NULL;
+		newtrain->dccfunc0to4 = NULL;
+		newtrain->next = NULL;
+	}
 	writeto(sock, "200 OK\r\n");
 }
 
 static void setga(int sock, char **saveptr) {
 
-	int address, port, value, delay;
+	int nr, address, pairnr, port, value, delay, offset;
 	struct generic_accessory *ga;
 
-	address = tokeninteger(NULL, saveptr); // * not supported
+	nr = tokeninteger(NULL, saveptr); // * not supported
 	port = tokeninteger(NULL, saveptr); // 0 or 1
 	value = tokeninteger(NULL, saveptr); // usually 1
 	delay = tokeninteger(NULL, saveptr); // delay in ms until 0 is sent
 
-	//ga = find_accessory(address);
+	address = ((nr - 1) / 4) + NMRA_GA_OFFSET;
+	pairnr = (nr - 1) % 4;
 
-//	if(!ga) {
-//		writeto(sock, "412 ERROR wrong value\r\n");
-//		return;
-//	}
+	ga = find_accessory(address,pairnr);
 
-//	ga->port = port;
-//	ga->value = value;
+	if(!ga) {
+		// needs init
+		writeto(sock, "412 ERROR wrong value\r\n");
+		return;
+	}
 
-	struct dccmessage *msg = add_update(NULL, 2, 128 | (address&63), 128 | (value>0?8:0) | port );
+	ga->port = port;
+	ga->value = value;
 
-//	ga->dcccommand = msg;
+	ga->address = address;
+	ga->pairnr = pairnr;
+
+	// {preamble} 0 10AAAAAA 0 1AAACDDD 0 EEEEEEEE 1
+	/* address byte: 10AAAAAA (lower 6 bits) */
+	/* address and data 1AAACDDO upper 3 address bits are inverted */
+	    /* C =  activate, DD = pairnr */
+	struct dccmessage *msg = add_update(ga->dcccommand, 2, 0x80 | (ga->address & 0x3f),
+			0x80 | ((~ga->address) & 0x1c0) >> 2 | value << 3 |
+				                     ga->pairnr << 1 | port );
+
+	ga->dcccommand = msg;
 
 	writeto(sock, "200 OK\r\n");
 
 	// send 0
 	usleep(delay*1000);
-	add_update(msg, 2, 128 | (address&63), 128  | port );
+//	add_update(msg, 2, 128 | (address&63), 128  | port );
 
 //	ga->value = 0;
 
-//	debug_printlist();
+	debug_printlist();
 
 }
 
@@ -645,6 +664,7 @@ static void setpower(int sock, char **saveptr)
 	}
 
 	/* Do something with the power setting */
+	set_power(on);
 
 	writeto(sock, "200 OK\r\n");
 }
@@ -654,7 +674,7 @@ static void getpower(int sock, char **saveptr)
 	const unsigned int bus = 1;
 	char buffer[512];
 
-	int on = 1;
+	int on = get_power();
 
 	/* Here too */
 
@@ -832,7 +852,7 @@ int main(void)
 		}
 
 		ntd->socket = acceptsock;
-	
+
 		if(pthread_create(&threadid, NULL, (void * (*)(void *)) communicationthread, ntd))
 		{
 			/* Failed to create thread */
