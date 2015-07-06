@@ -1,4 +1,8 @@
-#include <stdio.h>
+/**
+ * dcc.c
+ * for gpiodcc for raspberry pi
+ *
+ */
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -8,13 +12,6 @@
 
 /* Threads */
 #include <pthread.h>
-
-/* mmap() */
-#include <sys/mman.h>
-
-/* open() */
-#include <sys/stat.h>
-#include <fcntl.h>
 
 /* Timers */
 #include <signal.h>
@@ -29,22 +26,17 @@
 /* Scheduler */
 #include <sched.h>
 
+#include <wiringPi.h>
+
+#include <stdio.h>
+
 #include "dcc.h"
 
-#define BCM2708_PERI_BASE        0x20000000
-#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO controller */
+// GPIO ports to use, wiringPi numbering.
+#define GPIO_A 8
+#define GPIO_B 9
 
-#define PAGE_SIZE (4*1024)
-#define BLOCK_SIZE (4*1024)
 
-int  mem_fd;
-void *gpio_map;
-
-#define GPFSEL0	0	/* 0x00 */
-#define GPSET0	7	/* 0x1C */
-#define GPCLR0	10	/* 0x28 */
-
-static volatile unsigned int *gpio;
 static unsigned int on = 0;
 static pthread_t dccthreadid;
 
@@ -67,19 +59,6 @@ static struct dccmessage idlemessage =
 static pthread_mutex_t dccmutex;
 
 void setup_io();
-
-// GPIO setup macros. Always use INP_GPIO(x) before using OUT_GPIO(x) or SET_GPIO_ALT(x,y)
-#define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
-#define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
-#define SET_GPIO_ALT(g,a) *(gpio+(((g)/10))) |= (((a)<=3?(a)+4:(a)==4?3:2)<<(((g)%10)*3))
-
-#define GPIO_SET *(gpio+7)  // sets   bits which are 1 ignores bits which are 0
-#define GPIO_CLR *(gpio+10) // clears bits which are 1 ignores bits which are 0
-
-#define GET_GPIO(g) (*(gpio+13)&(1<<g)) // 0 if LOW, (1<<g) if HIGH
-
-#define GPIO_PULL *(gpio+37) // Pull up/pull down
-#define GPIO_PULLCLK0 *(gpio+38) // Pull up/pull down clock
 
 /* Debug */
 void debug_printlist(void)
@@ -185,7 +164,9 @@ void delete(struct dccmessage *message)
 static void dccthread_cleanup(void *unused)
 {
 	/* Stop everything */
-	gpio[GPCLR0] = 1+2+16;
+
+	digitalWrite(GPIO_A, 0);
+	digitalWrite(GPIO_B, 0);
 
 	/* Cancel the DCC mutex, if this thread is holding it (if not,
 	 * nothing will happen other than an ignored error)
@@ -224,9 +205,9 @@ static void rearm_timer(timer_t timerid, struct itimerspec *time, unsigned int i
 	}
 }
 
-/* Various macros for the function below */
-#define OUTPUT_A gpio[GPCLR0] = 1+16; gpio[GPSET0] = 2+16
-#define OUTPUT_B gpio[GPCLR0] = 2+16; gpio[GPSET0] = 1+16
+/* DCC GPIO output functions */
+#define OUTPUT_A digitalWrite(GPIO_A,1); digitalWrite(GPIO_B,0);
+#define OUTPUT_B digitalWrite(GPIO_B,1); digitalWrite(GPIO_A,0);
 #define PULSE0 OUTPUT_A; rearm_timer(timerid, &interval, 116000); sigwaitinfo(&sigwait_mask, NULL); OUTPUT_B; rearm_timer(timerid, &interval, 116000); sigwaitinfo(&sigwait_mask, NULL)
 #define PULSE1 OUTPUT_A; rearm_timer(timerid, &interval, 58000); sigwaitinfo(&sigwait_mask, NULL); OUTPUT_B; rearm_timer(timerid, &interval, 58000); sigwaitinfo(&sigwait_mask, NULL)
 #define PULSEIDLE OUTPUT_A; rearm_timer(timerid, &interval, 1000000); sigwaitinfo(&sigwait_mask, NULL); OUTPUT_B; rearm_timer(timerid, &interval, 1000000); sigwaitinfo(&sigwait_mask, NULL)
@@ -393,27 +374,6 @@ void setup_dcc(void)
 	puts("setup GPIO...");
 	setup_io();
 
-//	fd = open("/dev/mem", O_RDWR|O_SYNC);
-//
-//	gpio = mmap(NULL, 0xb0, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0x20200000);
-//
-//	if(gpio == MAP_FAILED)
-//	{
-//		perror("Could not map memory");
-//		exit(1);
-//	}
-
-	puts("programming GPIO0,1,4 as outputs...");
-	/* GPIO[0:1] and GPIO[4] are outputs */
-	INP_GPIO(0); // must use INP_GPIO before we can use OUT_GPIO
-	OUT_GPIO(0);
-	INP_GPIO(1); // must use INP_GPIO before we can use OUT_GPIO
-	OUT_GPIO(1);
-	INP_GPIO(4); // must use INP_GPIO before we can use OUT_GPIO
-	OUT_GPIO(4);
-
-//	gpio[GPFSEL0] = (9+(1<<12)) | (gpio[GPFSEL0] & ~(63+(7<<12)));
-
 	puts("init mutex...");
 	/* Initialise DCC message list mutex */
 	pthread_mutex_init(&dccmutex, NULL);
@@ -472,31 +432,13 @@ int get_power() {
 //
 void setup_io()
 {
-   /* open /dev/mem */
-   if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
-      printf("can't open /dev/mem \n");
-      exit(-1);
-   }
+	if(wiringPiSetup() == -1) {
+		puts("could not setup wiring pi");
+		exit(-1);
+	}
 
-   /* mmap GPIO */
-   gpio_map = mmap(
-      NULL,             //Any adddress in our space will do
-      BLOCK_SIZE,       //Map length
-      PROT_READ|PROT_WRITE,// Enable reading & writting to mapped memory
-      MAP_SHARED,       //Shared with other processes
-      mem_fd,           //File to map
-      GPIO_BASE         //Offset to GPIO peripheral
-   );
-
-   close(mem_fd); //No need to keep mem_fd open after mmap
-
-   if (gpio_map == MAP_FAILED) {
-      printf("mmap error %d\n", (int)gpio_map);//errno also set!
-      exit(-1);
-   }
-
-   // Always use volatile pointer!
-   gpio = (volatile unsigned *)gpio_map;
+	pinMode(GPIO_A, OUTPUT);
+	pinMode(GPIO_B, OUTPUT);
 
 
 } // setup_io
