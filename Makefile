@@ -14,7 +14,7 @@ srcp.o: srcp.c srcp.h dcc.h
 	gcc $(CFLAGS) -c $<
 
 gpiodcc: dcc.o srcp.o
-	gcc -o $@ $^ -lrt -lpthread
+	gcc -o $@ $^ -lrt -lpthread -lwiringPi
 
 clean:
 	rm -f gpiodcc *.o

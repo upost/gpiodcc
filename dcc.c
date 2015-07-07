@@ -32,7 +32,7 @@
 
 #include "dcc.h"
 
-// GPIO ports to use, wiringPi numbering.
+// GPIO ports to use, wiringPi numbering. You propably only need the first.
 #define GPIO_A 8
 #define GPIO_B 9
 
@@ -261,10 +261,10 @@ static void *dccthread(void *unused)
 	while(1)
 	{
 
-//		if(on==0) {
-//			usleep(100*1000);
-//			continue;
-//		}
+		if(on==0) {
+			usleep(100*1000);
+			continue;
+		}
 
 		/* Lock the message list - if it can't be locked at the
 		 * moment, keep transmitting zeroes until it can
