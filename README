@@ -29,6 +29,13 @@ My setup is as follows:
 
 This does work and is propably the cheapest DCC setup you can have!
 
+The gpiodcc service currently supports the following SRCP command subset:
+SET/GET POWER
+SET/GET/INIT/TERM GL (loco, only short addresses, 5 functions and 14 or 28 speed steps tested)
+SET/GET/INIT/TERM GA (accessory)
+
+Service mode will be supported later.
+
 Pi GPIO Output: Using wiringPi port 8 (please check the net to which pin this corresponds
 on your version of the Raspbery). Configurable in dcc.c.
 
